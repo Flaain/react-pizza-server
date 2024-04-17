@@ -4,7 +4,7 @@
     "version": "1.0.0",
     "type": "module",
     "scripts": {
-        "start": "concurrently \"nodemon --exec \\\"node -r dotenv/config\\\" .\" \"npm run stripe\"",
+        "start": "concurrently \"nodemon --exec \\\"node -r dotenv/config\\\" .\"",
         "stripe": "stripe listen --forward-to localhost:3000/order/checkout/webhook"
     },
     "dependencies": {
