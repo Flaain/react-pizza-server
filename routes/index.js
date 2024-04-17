@@ -7,6 +7,6 @@ import { router as userRouter } from "./User/User.js";
 
 const healthRouter = express.Router();
 
-healthRouter.get("/health", (_, res) => res.json({ message: "OK" }));
+healthRouter.get("/health", (_, res) => res.status(200).json({ message: "OK" }));
 
 export const routes = [authRouter, cartRouter, orderRouter, userRouter, healthRouter];
