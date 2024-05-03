@@ -24,21 +24,35 @@ class OrderController extends BaseController {
                 },
             } = this._stripe.webhooks.constructEvent(req.body, signature, process.env.STRIPE_WEBHOOK_SECRET);
 
-            if (type === "checkout.session.completed") {
-                const order = await Order.findById(order_id);
-                const user = await User.findById(user_id);
-                
-                if (!order || !user) return res.status(404).json({ message: "Заказ не найден" });
-                
-                order.status = "PAID";
-                order.total_amount = amount_total;
-                user.cart = [];
+            const actions = {
+                "checkout.session.completed": async () => {
+                    const [user, order] = await Promise.all([User.findById(user_id), Order.findById(order_id)]);
 
-                await user.save();
-                await order.save();
+                    if (!order || !user) return res.status(404).json({ message: "Заказ не найден" });
 
-                return res.json({ message: "Заказ оплачен" });
-            }
+                    order.status = "PAID";
+                    order.total_amount = amount_total;
+                    user.cart = [];
+
+                    await Promise.all([user.save(), order.save()]);
+
+                    return res.json({ message: "Заказ оплачен" });
+                },
+                "checkout.session.expired": async () => {
+                    const [user, order] = await Promise.all([User.findById(user_id), Order.findById(order_id)]);
+
+                    if (!order || !user) return res.status(404).json({ message: "Заказ не найден" });
+
+                    order.status = "CANCELED";
+                    user.cart = [];
+
+                    await Promise.all([user.save(), order.save()]);
+
+                    return res.json({ message: "Заказ отменен" });
+                },
+            };
+
+            await actions[type]?.();
         } catch (error) {
             console.error(error);
             res.status(500).json({ message: error.message || "Во время обработки Webhook произошла ошибка" });
@@ -54,11 +68,11 @@ class OrderController extends BaseController {
 
             if (!cart.items.length) return res.status(400).json({ message: "Корзина пуста" });
 
-            const { 
-                address: { id, rating, ...address }, 
-                deliveryPrice 
+            const {
+                address: { id, rating, ...address },
+                deliveryPrice,
             } = await this._getDeliveryInfo({ id: user.deliveryInfo.id, method: user.deliveryInfo.method, user });
-            
+
             const order = new Order({
                 cart: { items: cart.items.map(({ _id, ...rest }) => rest), total_price: cart.total_price },
                 deliveryInfo: { address, deliveryPrice },
@@ -68,32 +82,38 @@ class OrderController extends BaseController {
 
             const savedOrder = await order.save();
             const { _id } = savedOrder.toObject();
-            
+
             const orders = await Order.find({ user: user._id }).lean();
 
-            const extraInfo = orders.reduce((acc, order) => {
-                const isPayed = order.status === "PAID";
-                const totalOrdersPrice = acc.totalOrdersPrice + order.cart.total_price;
-                const purchaseAmount = acc.purchaseAmount + (isPayed ? (order.total_amount / 100) : 0);
-                const purchasePercent = (purchaseAmount / totalOrdersPrice) * 100;
-            
-                return {
-                    ...acc,
-                    totalItemsCount: acc.totalItemsCount + order.cart.items.length,
-                    purchasePercent,
-                    purchaseAmount,
-                    totalOrdersPrice,
-                };
-            }, { totalItemsCount: 0, totalOrdersPrice: 0, purchaseAmount: 0, purchasePercent: 0 });
+            const extraInfo = orders.reduce(
+                (acc, order) => {
+                    const isPayed = order.status === "PAID";
+                    const totalOrdersPrice = acc.totalOrdersPrice + order.cart.total_price;
+                    const purchaseAmount = acc.purchaseAmount + (isPayed ? order.total_amount / 100 : 0);
+                    const purchasePercent = (purchaseAmount / totalOrdersPrice) * 100;
 
-            res.json({ 
-                orderId: _id, 
+                    return {
+                        ...acc,
+                        totalItemsCount: acc.totalItemsCount + order.cart.items.length,
+                        purchasePercent,
+                        purchaseAmount,
+                        totalOrdersPrice,
+                    };
+                },
+                { totalItemsCount: 0, totalOrdersPrice: 0, purchaseAmount: 0, purchasePercent: 0 }
+            );
+
+            res.json({
+                orderId: _id,
                 extraInfo: {
                     ...extraInfo,
-                    ordersGoods: orders.flatMap(({ cart: { items } }) => items.map((item) => ({ id: item._id, src: item.imageUrl }))).reverse().slice(0, 5),
-                    ordersCount: orders.length
-                }, 
-                message: "Заказ успешно создан" 
+                    ordersGoods: orders
+                        .flatMap(({ cart: { items } }) => items.map((item) => ({ id: item._id, src: item.imageUrl })))
+                        .reverse()
+                        .slice(0, 5),
+                    ordersCount: orders.length,
+                },
+                message: "Заказ успешно создан",
             });
         } catch (error) {
             console.log(error);
@@ -110,19 +130,23 @@ class OrderController extends BaseController {
 
             if (!cart.items.length) return res.status(400).json({ message: "Корзина пуста" });
 
-            const candidate = await this._stripe.customers.search({ query: `metadata["user_id"]:"${user._id.toString()}"` });
+            const candidate = await this._stripe.customers.search({
+                query: `metadata["user_id"]:"${user._id.toString()}"`,
+            });
 
-            const customer = candidate.data[0] ?? (await this._stripe.customers.create({
-                name: user.name,
-                email: user.email,
-                phone: user.phone,
-                address: { country: "RU" },
-                metadata: { user_id: user._id.toString() },
-            }));
+            const customer =
+                candidate.data[0] ??
+                (await this._stripe.customers.create({
+                    name: user.name,
+                    email: user.email,
+                    phone: user.phone,
+                    address: { country: "RU" },
+                    metadata: { user_id: user._id.toString() },
+                }));
 
-            const { 
-                address: { id, rating, ...address }, 
-                deliveryPrice 
+            const {
+                address: { id, rating, ...address },
+                deliveryPrice,
             } = await this._getDeliveryInfo({ id: user.deliveryInfo.id, method: user.deliveryInfo.method, user });
 
             const order = new Order({
@@ -149,13 +173,13 @@ class OrderController extends BaseController {
                     setup_future_usage: "off_session",
                     shipping: {
                         name: user.name,
-                        address: { 
+                        address: {
                             country: "RU",
                             city: address.city,
                             line1: address.line,
                             postal_code: address.postal_code,
-                            state: address.state
-                         },
+                            state: address.state,
+                        },
                     },
                 },
                 shipping_options: [
@@ -198,7 +222,7 @@ class OrderController extends BaseController {
             console.log(error);
             res.status(500).json({ message: error.message || "Во время получения заказов произошла ошибка" });
         }
-    }
+    };
 }
 
 export const orderController = new OrderController({ apiKey: process.env.STRIPE_SECRET });
