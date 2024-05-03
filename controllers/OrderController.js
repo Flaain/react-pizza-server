@@ -39,14 +39,13 @@ class OrderController extends BaseController {
                     return res.json({ message: "Заказ оплачен" });
                 },
                 "checkout.session.expired": async () => {
-                    const [user, order] = await Promise.all([User.findById(user_id), Order.findById(order_id)]);
+                    const order = await Order.findById(order_id);
 
-                    if (!order || !user) return res.status(404).json({ message: "Заказ не найден" });
+                    if (!order) return res.status(404).json({ message: "Заказ не найден" });
 
                     order.status = "CANCELED";
-                    user.cart = [];
 
-                    await Promise.all([user.save(), order.save()]);
+                    await order.save();
 
                     return res.json({ message: "Заказ отменен" });
                 },
