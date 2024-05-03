@@ -168,6 +168,7 @@ class OrderController extends BaseController {
                     },
                     quantity: product.count,
                 })),
+                expires_at: 1800,
                 customer: customer.id,
                 payment_intent_data: {
                     setup_future_usage: "off_session",
